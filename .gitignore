@@ -1,0 +1,12 @@
+.DS_Store
+**/.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.env
+data/raw/
+data/processed/
+outputs/
