@@ -1,4 +1,4 @@
-# Tatva Silicon Agri v1
+# Early detection and prediction of Plant Disease (Tatva Silicon)
 
 Early detection and prediction of plant diseases and pests in Indian agriculture, with a focus on greenhouse monitoring. Built with free tools, deployable as a Streamlit app.
 
