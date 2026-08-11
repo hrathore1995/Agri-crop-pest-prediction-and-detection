@@ -22,6 +22,7 @@ MODEL_PATH  = ROOT / "models" / "track_b_pooled_reg.json"
 BUNDLE_PATH = ROOT / "models" / "app_bundle.pkl"
 LEAF_MODEL   = ROOT / "models" / "multicrop_mobilenetv3.pt"
 LEAF_CLASSES = ROOT / "models" / "multicrop_classes.json"
+OOD_PATH     = ROOT / "models" / "multicrop_ood.npz"
 
 st.set_page_config(page_title="Agri Decision Support", page_icon="🌱", layout="wide")
 BAND_COLORS = {"Low": "#2e7d32", "Medium": "#f9a825", "High": "#c62828"}
@@ -52,11 +53,22 @@ def load_leaf_model():
     m.classifier[3] = torch.nn.Linear(m.classifier[3].in_features, len(classes))
     m.load_state_dict(torch.load(LEAF_MODEL, map_location="cpu"))
     m.eval()
-    return m, classes
+    extractor = torch.nn.Sequential(m.features, m.avgpool).eval()
+    return m, classes, extractor
 
 
-def predict_leaf(model, classes, pil_img, topk=3):
-    import torch
+@st.cache_resource
+def load_ood():
+    import numpy as np
+    if not OOD_PATH.exists():
+        return None
+    z = np.load(OOD_PATH, allow_pickle=True)
+    return {"means": z["means"], "cov_inv": z["cov_inv"],
+            "threshold": float(z["threshold"])}
+
+
+def predict_leaf(model, classes, extractor, ood, pil_img, topk=3):
+    import torch, numpy as np
     from torchvision import transforms
     tf = transforms.Compose([
         transforms.Resize(256), transforms.CenterCrop(224), transforms.ToTensor(),
@@ -64,9 +76,15 @@ def predict_leaf(model, classes, pil_img, topk=3):
     x = tf(pil_img).unsqueeze(0)
     with torch.no_grad():
         probs = torch.softmax(model(x), dim=1)[0]
+        emb = extractor(x).flatten(1).numpy()[0]
     k = min(topk, len(classes))
     tp, ti = probs.topk(k)
-    return [(classes[int(i)], float(p)) for p, i in zip(tp, ti)]
+    preds = [(classes[int(i)], float(p)) for p, i in zip(tp, ti)]
+    score = None
+    if ood is not None:
+        diffs = emb[None, :] - ood["means"]
+        score = float(np.einsum("cd,de,ce->c", diffs, ood["cov_inv"], diffs).min())
+    return preds, score
 
 
 # =====================================================================  PEST
@@ -339,28 +357,54 @@ def render_leaf_page():
         st.info("⬅  Upload a leaf photo in the sidebar to get a prediction.")
         return
 
+    strictness = st.sidebar.select_slider(
+        "Non-leaf rejection", options=["Lenient","Balanced","Strict"], value="Lenient",
+        help="How aggressively to reject images that don't look like a supported leaf. "
+             "If your real leaf photos get wrongly rejected, choose 'Lenient'.")
+    mult = {"Lenient": 4.0, "Balanced": 2.0, "Strict": 1.0}[strictness]
+
     from PIL import Image
     img = Image.open(up).convert("RGB")
-    model, classes = load_leaf_model()
-    preds = predict_leaf(model, classes, img, topk=3)
+    model, classes, extractor = load_leaf_model()
+    ood = load_ood()
+    preds, score = predict_leaf(model, classes, extractor, ood, img, topk=3)
+    eff_thr = ood["threshold"] * mult if ood is not None else None
+    is_ood = (score is not None) and (score > eff_thr)
     top_cls, top_conf = preds[0]
     crop, disease = nice_label(top_cls)
 
     c1, c2 = st.columns([1, 1.3])
     c1.image(img, caption="your photo", use_container_width=True)
     with c2:
-        st.markdown(f"### {crop} — {disease}")
-        st.metric("Confidence", f"{top_conf*100:.1f}%")
-        if top_conf < 0.5:
-            st.warning("**Low confidence.** The photo may be unclear, or the leaf may "
-                       "not be one of the 5 supported crops. Treat this as a rough guess.")
-        st.caption("Top 3 possibilities:")
-        for c, p in preds:
-            cr, ds = nice_label(c)
-            st.write(f"**{cr} — {ds}** · {p*100:.1f}%")
-            st.progress(min(1.0, p))
-    st.caption("Reminder: an aid, not a diagnosis. If the plant isn't banana, "
-               "cauliflower, chilli, groundnut, or radish, ignore the result.")
+        if is_ood:
+            st.error("🚫 **This doesn't look like a supported leaf.** The image is "
+                     "unlike anything the model was trained on, so it won't give a "
+                     "reliable prediction. If it really is a banana, cauliflower, "
+                     "chilli, groundnut, or radish leaf, try a clearer, closer, "
+                     "well-lit photo of a single leaf.")
+            with st.expander("Show the model's (unreliable) guess anyway"):
+                st.write(f"{crop} — {disease} · {top_conf*100:.1f}% "
+                         f"(ignore this — flagged as out-of-distribution)")
+        else:
+            st.markdown(f"### {crop} — {disease}")
+            st.metric("Confidence", f"{top_conf*100:.1f}%")
+            if top_conf < 0.5:
+                st.warning("**Low confidence.** The photo may be unclear. Treat as a "
+                           "rough guess.")
+            st.caption("Top 3 possibilities:")
+            for c, p in preds:
+                cr, ds = nice_label(c)
+                st.write(f"**{cr} — {ds}** · {p*100:.1f}%")
+                st.progress(min(1.0, p))
+    if ood is None:
+        st.caption("Note: the 'not a leaf' detector isn't built yet — run "
+                   "`python src/12_build_ood.py` to enable rejection of non-leaf images.")
+    elif score is not None:
+        st.caption(f"Out-of-distribution distance: **{score:.0f}** "
+                   f"(rejected above **{eff_thr:.0f}** at '{strictness}' setting). "
+                   f"Lower = more leaf-like. Adjust the strictness slider if real "
+                   f"leaves are wrongly rejected or non-leaves slip through.")
+    st.caption("Reminder: an aid, not a diagnosis, even when confident.")
 
 
 # =====================================================================  ROUTER
