@@ -358,10 +358,10 @@ def render_leaf_page():
         return
 
     strictness = st.sidebar.select_slider(
-        "Non-leaf rejection", options=["Lenient","Balanced","Strict"], value="Lenient",
+        "Non-leaf rejection", options=["Lenient","Balanced","Strict"], value="Balanced",
         help="How aggressively to reject images that don't look like a supported leaf. "
              "If your real leaf photos get wrongly rejected, choose 'Lenient'.")
-    mult = {"Lenient": 4.0, "Balanced": 2.0, "Strict": 1.0}[strictness]
+    mult = {"Lenient": 1.3, "Balanced": 1.1, "Strict": 0.9}[strictness]
 
     from PIL import Image
     img = Image.open(up).convert("RGB")
