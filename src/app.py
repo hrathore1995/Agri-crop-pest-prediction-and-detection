@@ -24,7 +24,7 @@ LEAF_MODEL   = ROOT / "models" / "multicrop_mobilenetv3.pt"
 LEAF_CLASSES = ROOT / "models" / "multicrop_classes.json"
 OOD_PATH     = ROOT / "models" / "multicrop_ood.npz"
 
-st.set_page_config(page_title="Agri Decision Support", page_icon="🌱", layout="wide")
+st.set_page_config(page_title="Tatva Silicon Agri Decision Support", page_icon="🌱", layout="wide")
 BAND_COLORS = {"Low": "#2e7d32", "Medium": "#f9a825", "High": "#c62828"}
 
 
