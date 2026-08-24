@@ -2,9 +2,11 @@
 src/app.py  —  Agri decision-support suite (multi-tool).
 Run with:  streamlit run src/app.py
 
-Two tools, switch in the sidebar:
+Four tools, switch in the sidebar:
   1. Pest forecast (rice & cotton)  — weather -> next-week pest pressure (Track B)
   2. Plant health check (tomato)    — live sensor readings -> health status (Track A)
+  3. Tomato Netherlands             — crop stage -> harvest-rate benchmark (Track D)
+  4. Leaf disease ID (photo)        — leaf photo -> disease class (Track C)
 """
 import pickle
 from pathlib import Path
@@ -23,6 +25,8 @@ BUNDLE_PATH = ROOT / "models" / "app_bundle.pkl"
 LEAF_MODEL   = ROOT / "models" / "multicrop_mobilenetv3.pt"
 LEAF_CLASSES = ROOT / "models" / "multicrop_classes.json"
 OOD_PATH     = ROOT / "models" / "multicrop_ood.npz"
+NL_MODEL     = ROOT / "models" / "track_d_nl_reg.json"
+NL_BUNDLE    = ROOT / "models" / "nl_bundle.pkl"
 
 st.set_page_config(page_title="Tatva Silicon Agri Decision Support", page_icon="🌱", layout="wide")
 BAND_COLORS = {"Low": "#2e7d32", "Medium": "#f9a825", "High": "#c62828"}
@@ -33,6 +37,15 @@ def load_pest_artifacts():
     model = XGBRegressor()
     model.load_model(MODEL_PATH)
     with open(BUNDLE_PATH, "rb") as f:
+        bundle = pickle.load(f)
+    return model, bundle
+
+
+@st.cache_resource
+def load_nl_artifacts():
+    model = XGBRegressor()
+    model.load_model(NL_MODEL)
+    with open(NL_BUNDLE, "rb") as f:
         bundle = pickle.load(f)
     return model, bundle
 
@@ -407,18 +420,183 @@ def render_leaf_page():
     st.caption("Reminder: an aid, not a diagnosis, even when confident.")
 
 
+# ======================================================  TOMATO NETHERLANDS
+def render_nl_page():
+    try:
+        model, bundle = load_nl_artifacts()
+    except Exception as e:
+        st.error("Could not load the Netherlands model. Run "
+                 "`python src/13_prepare_netherlands.py` then "
+                 "`python src/14_train_netherlands.py` first.\n\n" + str(e))
+        return
+
+    m = bundle["metrics"]
+
+    st.sidebar.header("1. Where is your crop?")
+    dap = st.sidebar.slider(
+        "Days since planting", bundle["dap_min"], bundle["dap_max"],
+        int((bundle["dap_min"] + bundle["dap_max"]) / 2), 1,
+        help="How far into the season this crop is. This is what drives the benchmark.")
+    interval = st.sidebar.slider(
+        "Days since your last pick", 3.0, 5.0, float(bundle["median_interval"]), 0.5,
+        help="The Dutch growers harvested every 3–5 days.")
+
+    st.sidebar.header("2. Your harvest (optional)")
+    actual = st.sidebar.number_input(
+        "Class-A fruit picked (kg/m²)", 0.0, 5.0, 0.0, 0.05,
+        help="What you actually picked this time. Leave at 0 to skip the comparison.")
+
+    st.sidebar.header("3. Your climate (optional)")
+    st.sidebar.caption("Checked against the band the six Dutch greenhouses held at "
+                       "this crop stage. Reference only — these do **not** feed the "
+                       "prediction (see limits).")
+    readings = {
+        "Tair":    st.sidebar.slider("Air temperature (°C)", 15.0, 32.0, 22.0, 0.1),
+        "Rhair":   st.sidebar.slider("Relative humidity (%)", 50.0, 100.0, 83.0, 0.5),
+        "CO2air":  st.sidebar.slider("CO₂ (ppm)", 300.0, 1200.0, 680.0, 10.0),
+        "HumDef":  st.sidebar.slider("Humidity deficit (g/m³)", 0.0, 12.0, 3.0, 0.1),
+        "Tot_PAR": st.sidebar.slider("PAR light (µmol/m²/s)", 0.0, 700.0, 240.0, 5.0),
+    }
+
+    st.title("🇳🇱 Tomato Netherlands — Harvest Benchmark")
+    st.caption("What six professionally-run Dutch greenhouses were picking at this "
+               "point in the season · Autonomous Greenhouse Challenge, 2nd edition "
+               "(Wageningen UR, cherry tomato, Dec 2019 – May 2020)")
+
+    with st.expander("ℹ️  New here? How to use this dashboard", expanded=True):
+        st.markdown(
+            "**What it does** — Six greenhouse compartments in the Netherlands grew "
+            "cherry tomato side by side for a full season: five run by autonomous AI "
+            "teams, one by a group of Dutch commercial growers. This tool tells you "
+            "**how much fruit they were harvesting at the crop stage you're at**, so "
+            "you can benchmark your own picking rate against a professional standard.\n\n"
+            "**How to read the answer**\n"
+            "- **Expected harvest rate** — kg of marketable (class-A) fruit per m² per "
+            "day that the six greenhouses averaged at this crop stage.\n"
+            "- **Expected this pick** — the same figure multiplied by the days since "
+            "your last harvest.\n"
+            "- **Your standing** — enter what you actually picked and the tool says "
+            "whether you're behind, on track, or ahead of the benchmark.\n"
+            "- **Climate check** — where your greenhouse sits against the range the "
+            "six expert compartments actually maintained at this stage.\n\n"
+            "**Important:** this benchmarks a Dutch high-tech glasshouse growing "
+            "hydroponically. It is a reference point, not a target for every setup.")
+
+    rate = P.nl_predict_rate(model, bundle, dap, interval)
+    expected_pick = rate * interval
+
+    c1, c2, c3 = st.columns([1, 1, 1.4])
+    c1.metric("Expected harvest rate", f"{rate:.3f} kg/m²/day",
+              help=f"What the six Dutch compartments averaged at day {dap}.")
+    c2.metric(f"Expected this pick ({interval:.1f} days)", f"{expected_pick:.2f} kg/m²",
+              help="Expected rate multiplied by days since your last harvest.")
+    with c3:
+        if actual > 0:
+            standing = P.nl_compare(bundle, rate, actual / interval)
+            colour = {"Behind benchmark": "#c62828", "On track": "#2e7d32",
+                      "Ahead of benchmark": "#1565c0"}[standing]
+            st.markdown(f"<div style='padding:0.4rem 0'>Your standing</div>"
+                        f"<div style='font-size:1.8rem;font-weight:700;color:{colour}'>"
+                        f"{standing}</div>", unsafe_allow_html=True)
+            st.caption(f"You picked {actual:.2f} kg/m² · benchmark says "
+                       f"{expected_pick:.2f} kg/m²")
+        else:
+            st.info("Enter what you actually picked in the sidebar to see whether "
+                    "you're behind, on track, or ahead.")
+
+    # ---- benchmark curve across the season ----
+    st.subheader("📈 Harvest rate across the season")
+    st.caption("X-axis = days since planting. The line is the benchmark this model "
+               "predicts; the grey dots are every real harvest recorded in the six "
+               "Dutch compartments.")
+    curve = pd.DataFrame({"days since planting": bundle["dap_grid"],
+                          "benchmark rate": bundle["stage_curve"]})
+    obs = pd.concat([pd.DataFrame({"days since planting": x, "rate": y, "compartment": t})
+                     for t, (x, y) in bundle["observed"].items()])
+    dots = alt.Chart(obs).mark_circle(size=26, opacity=0.45, color="#8a8a8a").encode(
+        x=alt.X("days since planting:Q", scale=alt.Scale(zero=False)),
+        y=alt.Y("rate:Q", title="class-A harvest (kg/m²/day)"),
+        tooltip=["compartment", "days since planting", "rate"])
+    line = alt.Chart(curve).mark_line(color="#2e7d32", strokeWidth=2.5).encode(
+        x="days since planting:Q", y="benchmark rate:Q")
+    marker = alt.Chart(pd.DataFrame({"d": [dap]})).mark_rule(
+        color="#c62828", strokeDash=[4, 3]).encode(x="d:Q")
+    st.altair_chart((dots + line + marker).properties(height=320),
+                    use_container_width=True)
+    st.caption(f"The dashed red line marks the crop stage you selected (day {dap}).")
+
+    # ---- climate envelope check ----
+    st.subheader("🌡️ Your climate vs the expert band")
+    st.caption("The range (10th–90th percentile) the six Dutch compartments actually "
+               "held at roughly this crop stage. A reference check — not a prediction.")
+    rows = P.nl_envelope_check(bundle, dap, readings)
+    if rows:
+        edf = pd.DataFrame(rows)
+        edf["status"] = np.where(edf["ok"], "✓ within expert band", "✗ outside")
+        st.dataframe(edf[["variable", "your value", "expert band", "expert median", "status"]],
+                     hide_index=True, use_container_width=True)
+        n_out = int((~edf["ok"]).sum())
+        if n_out:
+            st.caption(f"{n_out} of {len(edf)} readings sit outside the band the Dutch "
+                       f"growers held. That is worth a look, but the band describes "
+                       f"*their* glasshouse — it is not automatically wrong for yours.")
+    else:
+        st.caption("No envelope data for this crop stage.")
+
+    # ---- season totals ----
+    with st.expander("What did the six compartments actually produce?"):
+        tot = pd.DataFrame({"compartment": list(bundle["season_totals"].keys()),
+                            "season total (kg/m²)": [round(v, 2) for v in
+                                                     bundle["season_totals"].values()]})
+        st.dataframe(tot.sort_values("season total (kg/m²)", ascending=False),
+                     hide_index=True, use_container_width=True)
+        st.caption("Five autonomous-AI teams plus a Reference compartment run by Dutch "
+                   "commercial growers. The spread between best and worst is only "
+                   "11% — they all performed similarly.")
+
+    with st.expander("How good is this benchmark? (accuracy & limits)"):
+        st.markdown(
+            f"- Validated **leave-one-compartment-out**: trained on five greenhouses, "
+            f"tested on the sixth, rotated through all six. That is the honest test — "
+            f"a random split would let the model see the same greenhouse on both sides.\n"
+            f"- **MAE {m['mae']:.4f} kg/m²/day** against a mean rate of "
+            f"{m['mean_rate']:.3f} (about {m['mae'] / m['mean_rate'] * 100:.0f}% error), "
+            f"**R² {m['r2']:+.2f}** over {m['n']} harvests in "
+            f"{m['n_compartments']} compartments.\n"
+            f"- **The model uses crop stage only, and that is a deliberate finding.** "
+            f"Temperature, humidity, CO₂, light and irrigation features were all tested "
+            f"and none improved accuracy — several made it worse. After accounting for "
+            f"crop stage there is **no statistically detectable difference between the "
+            f"six compartments at all** (ANOVA F=0.80, p=0.55).\n"
+            f"- The reason is that all six were run by expert controllers inside a "
+            f"narrow, near-optimal envelope: 2.3 °C, 5.4% RH and 156 ppm CO₂ separated "
+            f"the extremes, and season totals spanned just 11%. There is very little "
+            f"variation in either the climate or the yield for a model to learn from.\n"
+            f"- So this is an **honest benchmark curve, not a climate-driven yield "
+            f"predictor**. The climate panel above is a separate reference check.\n"
+            f"- Covers a **Dutch high-tech glasshouse, hydroponic rockwool, cherry "
+            f"tomato, winter–spring at 52°N** with supplemental HPS lighting and CO₂ "
+            f"dosing. It does not transfer directly to a soil-grown Indian greenhouse.\n"
+            f"- Separate from the **Plant health check (tomato)** tab, which is an "
+            f"Indian soil-sensor rule check on a different dataset. Neither model "
+            f"feeds the other.")
+
+
 # =====================================================================  ROUTER
 st.sidebar.title("🌱 Agri Decision Support")
 tool = st.sidebar.radio(
     "Choose a tool",
     ["Pest forecast (rice & cotton)",
      "Plant health check (tomato)",
+     "Tomato Netherlands (harvest benchmark)",
      "Leaf disease ID (photo)"],
-    help="Three separate tools — pick one.")
+    help="Four separate tools — pick one.")
 st.sidebar.divider()
 if tool.startswith("Pest"):
     render_pest_page()
 elif tool.startswith("Plant"):
     render_tomato_page()
+elif tool.startswith("Tomato Netherlands"):
+    render_nl_page()
 else:
     render_leaf_page()
