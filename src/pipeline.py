@@ -184,3 +184,69 @@ def kalman_smooth(week_ids, values, q_level=0.02, q_slope=0.002, r_obs=0.35):
     std_pred = np.sqrt(var_level + resid_var)       # predictive std (calibrated)
     est = np.expm1(level)
     return est, np.expm1(level - 2*std_pred), np.expm1(level + 2*std_pred)
+
+# ===========================================================================
+# Track D (Netherlands) — harvest-rate benchmark from the Autonomous
+# Greenhouse Challenge compartments. Separate from Track A on purpose: that
+# one is an Indian soil-grown tomato rule check, this one is a Dutch
+# hydroponic yield benchmark. They share nothing but the crop.
+#
+# The model takes crop stage only. Climate features were tested and did not
+# improve leave-one-compartment-out accuracy (see 14_train_netherlands.py),
+# so climate is handled below as a separate reference check rather than
+# being fed to the model as if it were doing work.
+# ===========================================================================
+NL_LABELS = {
+    "Tair":   "Air temperature (°C)",
+    "Rhair":  "Relative humidity (%)",
+    "CO2air": "CO₂ (ppm)",
+    "HumDef": "Humidity deficit (g/m³)",
+    "Tot_PAR": "PAR light (µmol/m²/s)",
+}
+
+
+def nl_predict_rate(model, bundle, dap, interval_days=None):
+    """Expected class-A harvest rate (kg/m²/day) at a given crop stage."""
+    if interval_days is None:
+        interval_days = bundle["median_interval"]
+    x = pd.DataFrame([{"dap": float(dap), "interval_days": float(interval_days)}],
+                     columns=bundle["feature_cols"])
+    rate = float(model.predict(x)[0])
+    return max(0.0, rate)
+
+
+def nl_compare(bundle, expected_rate, actual_rate):
+    """Where an actual harvest sits against the benchmark: behind / on track / ahead."""
+    if actual_rate is None:
+        return None
+    lo, hi = bundle["resid_cutoffs"]
+    resid = actual_rate - expected_rate
+    if resid <= lo:
+        return "Behind benchmark"
+    return "On track" if resid <= hi else "Ahead of benchmark"
+
+
+def nl_envelope_check(bundle, dap, readings: dict):
+    """Compare live climate readings to the p10–p90 band the six expert
+    compartments actually held at this crop stage. A reference check, not a
+    prediction — nothing here feeds the model."""
+    env = bundle["envelope"]
+    bins = sorted({b for v in env.values() for b in v})
+    if not bins:
+        return []
+    nearest = min(bins, key=lambda b: abs(b - dap))
+    rows = []
+    for var in bundle["envelope_vars"]:
+        band = env.get(var, {}).get(nearest)
+        v = readings.get(var)
+        if band is None or v is None:
+            continue
+        lo, mid, hi = band
+        rows.append({
+            "variable": NL_LABELS.get(var, var),
+            "your value": round(float(v), 1),
+            "expert band": f"{lo:.1f} – {hi:.1f}",
+            "expert median": round(mid, 1),
+            "ok": bool(lo <= v <= hi),
+        })
+    return rows

@@ -28,12 +28,38 @@ MobileNetV3-small fine-tuned on the Tamil Nadu Multi-Crop Disease Dataset (21,87
 
 The Maharashtra soybean leaf dataset is downloaded but not yet incorporated into this track.
 
+## Track D — Tomato Netherlands (harvest benchmark)
+
+A **separate** model from Track A, on a separate dataset, deployed as its own tab. Track A is an Indian soil-grown tomato rule check; this is a Dutch hydroponic yield benchmark. Neither model touches the other and neither was overwritten.
+
+Source: the **Autonomous Greenhouse Challenge, 2nd edition** (Wageningen UR, Bleiswijk) — six greenhouse compartments growing cherry tomato in rockwool from 2019-12-16 to 2020-05-30, five run by autonomous-AI teams and one Reference compartment run by Dutch commercial growers. Climate is logged every 5 minutes (47,809 rows per compartment); fruit is harvested every 3–5 days. `13_prepare_netherlands.py` reduces this to 139 harvest events with two look-back windows per harvest (since the previous pick, and the 35–55 day fruit-development window).
+
+XGBoost regression on class-A harvest rate (kg/m²/day — normalised because harvest gaps vary 3–5 days). Validated **leave-one-compartment-out**: train on five greenhouses, predict the sixth, rotate. **MAE 0.0309 kg/m²/day against a 0.133 mean (~23% error), R² +0.58** over 139 harvests.
+
+**The model uses crop stage only, and that is a finding rather than a shortcut.** Every richer feature set was tested and none beat it:
+
+| features | k | MAE | R² |
+|---|---|---|---|
+| flat mean baseline | 0 | 0.0456 | −0.004 |
+| **crop stage only** | **2** | **0.0309** | **+0.580** |
+| stage + light | 6 | 0.0323 | +0.578 |
+| stage + light + indoor climate | 10 | 0.0320 | +0.552 |
+| stage + indoor climate | 6 | 0.0325 | +0.527 |
+| everything | 77 | 0.0321 | +0.573 |
+
+After accounting for crop stage there is **no statistically detectable difference between the six compartments at all** (ANOVA on residuals, F=0.80, p=0.55). All six were run by expert controllers inside a narrow, near-optimal envelope — 2.3 °C, 5.4% RH and 156 ppm CO₂ separated the extremes, and season totals spanned just 11% (12.89–14.36 kg/m²). There is very little variation in either climate or yield for a model to learn from, so this ships as an honest benchmark curve, not a climate-driven yield predictor. Climate is handled in the app as a separate percentile reference check against the band the six compartments actually held, clearly labelled as not feeding the prediction.
+
+Scope limit: a Dutch high-tech glasshouse, hydroponic rockwool, cherry tomato, winter–spring at 52°N with supplemental HPS lighting and CO₂ dosing. It does not transfer directly to a soil-grown Indian greenhouse.
+
+**Why this dataset could not simply retrain Track A:** the challenge greenhouses are hydroponic, so there is no soil-nutrient measurement anywhere in the archive. Three of Track A's five thresholded variables (N, P, K in mg/kg) have no counterpart — the only nutrient data is 10 manual lab samples per compartment in mmol/L of nutrient *solution*. `ref_et`, `et`, `crop_coeff` and `growth_stage` are also absent. Hence a new model rather than a weight update.
+
 ## App
 
-`src/app.py` is a three-tool Streamlit app (sidebar radio switcher) sharing `src/pipeline.py` for consistent feature engineering between training and inference.
+`src/app.py` is a four-tool Streamlit app (sidebar radio switcher) sharing `src/pipeline.py` for consistent feature engineering between training and inference.
 
 - **Pest forecast (rice & cotton):** crop → location → pest selectors, week selector bounded to monitored windows, weather scenario sliders, seasonal profile chart, Kalman hidden-state chart, non-zero tercile risk banding (Low/Medium/High), measurement units per series
 - **Plant health check (tomato):** live sensor sliders with in-range/out-of-range display per variable
+- **Tomato Netherlands (harvest benchmark):** crop-stage slider → expected class-A harvest rate, benchmark curve across the season with every real harvest from the six Dutch compartments overlaid, a behind/on-track/ahead standing if you enter what you actually picked, and a climate-envelope reference check against the p10–p90 band the expert compartments held at that stage
 - **Leaf disease ID (photo):** upload a leaf photo, get the predicted crop + disease with a confidence score, top-3 breakdown, and a low-confidence warning (see Track C note above)
 
 ## Setup (local development)
@@ -62,10 +88,11 @@ A couple of deployment-specific notes, in case this ever needs redoing:
 - Assam University tomato sensor dataset
 - ICAR-CRIDA pest-weather archive
 - Tamil Nadu multi-crop disease image dataset
+- Autonomous Greenhouse Challenge 2nd edition (WUR) — expected at `data/raw/netherlands_agc/`
 - Maharashtra soybean leaf image dataset
 
 <!-- TODO: add download links -->
 
 ## Status
 
-Deployed and live on Streamlit Community Cloud, all three tracks working. Remaining open items: incorporate the Maharashtra soybean dataset, and add data source download links above.
+Deployed and live on Streamlit Community Cloud, all four tracks working. Remaining open items: incorporate the Maharashtra soybean dataset, and add data source download links above.
