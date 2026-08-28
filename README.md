@@ -34,18 +34,24 @@ A **separate** model from Track A, on a separate dataset, deployed as its own ta
 
 Source: the **Autonomous Greenhouse Challenge, 2nd edition** (Wageningen UR, Bleiswijk) — six greenhouse compartments growing cherry tomato in rockwool from 2019-12-16 to 2020-05-30, five run by autonomous-AI teams and one Reference compartment run by Dutch commercial growers. Climate is logged every 5 minutes (47,809 rows per compartment); fruit is harvested every 3–5 days. `13_prepare_netherlands.py` reduces this to 139 harvest events with two look-back windows per harvest (since the previous pick, and the 35–55 day fruit-development window).
 
-XGBoost regression on class-A harvest rate (kg/m²/day — normalised because harvest gaps vary 3–5 days). Validated **leave-one-compartment-out**: train on five greenhouses, predict the sixth, rotate. **MAE 0.0309 kg/m²/day against a 0.133 mean (~23% error), R² +0.58** over 139 harvests.
+XGBoost regression on class-A harvest rate (kg/m²/day — normalised because harvest gaps vary 3–5 days). Validated **leave-one-compartment-out**: train on five greenhouses, predict the sixth, rotate. **MAE 0.0311 kg/m²/day against a 0.134 mean (~23% error), R² +0.57** over 139 harvests.
+
+`days_into_season` counts from 2019-12-16, when logging began and the plants went into the greenhouse. It is **not** days since sowing — the plants were raised in a propagator first, and the archive never states a sowing date.
 
 **The model uses crop stage only, and that is a finding rather than a shortcut.** Every richer feature set was tested and none beat it:
 
-| features | k | MAE | R² |
-|---|---|---|---|
-| flat mean baseline | 0 | 0.0456 | −0.004 |
-| **crop stage only** | **2** | **0.0309** | **+0.580** |
-| stage + light | 6 | 0.0323 | +0.578 |
-| stage + light + indoor climate | 10 | 0.0320 | +0.552 |
-| stage + indoor climate | 6 | 0.0325 | +0.527 |
-| everything | 77 | 0.0321 | +0.573 |
+Averaged over 15 random seeds, because the gap between the top two sets is a few thousandths of R² and one seed cannot resolve it:
+
+| features | k | MAE | R² mean | R² sd |
+|---|---|---|---|---|
+| flat mean baseline | 0 | 0.0451 | −0.004 | — |
+| **crop stage only** | **2** | **0.0310** | **+0.571** | **0.002** |
+| stage + light | 6 | 0.0324 | +0.573 | 0.008 |
+| stage + light + indoor climate | 10 | 0.0320 | +0.550 | 0.007 |
+| stage + indoor climate | 6 | 0.0333 | +0.505 | 0.011 |
+| everything | 77 | 0.0330 | +0.527 | 0.014 |
+
+Indoor climate loses outright. Outside light ties crop-stage-only on R² (+0.573 vs +0.571, inside its own 0.008 spread) but is worse on average error and four times less stable, so the two-feature model ships.
 
 After accounting for crop stage there is **no statistically detectable difference between the six compartments at all** (ANOVA on residuals, F=0.80, p=0.55). All six were run by expert controllers inside a narrow, near-optimal envelope — 2.3 °C, 5.4% RH and 156 ppm CO₂ separated the extremes, and season totals spanned just 11% (12.89–14.36 kg/m²). There is very little variation in either climate or yield for a model to learn from, so this ships as an honest benchmark curve, not a climate-driven yield predictor. Climate is handled in the app as a separate percentile reference check against the band the six compartments actually held, clearly labelled as not feeding the prediction.
 

@@ -433,10 +433,12 @@ def render_nl_page():
     m = bundle["metrics"]
 
     st.sidebar.header("1. Where is your crop?")
-    dap = st.sidebar.slider(
-        "Days since planting", bundle["dap_min"], bundle["dap_max"],
-        int((bundle["dap_min"] + bundle["dap_max"]) / 2), 1,
-        help="How far into the season this crop is. This is what drives the benchmark.")
+    stage = st.sidebar.slider(
+        "Days into the season", bundle["stage_min"], bundle["stage_max"],
+        int((bundle["stage_min"] + bundle["stage_max"]) / 2), 1,
+        help="Days since the Dutch season started (16 Dec 2019, when the plants went "
+             "into the greenhouse). Not days since sowing — the plants were already "
+             "raised in a propagator before then. This is what drives the benchmark.")
     interval = st.sidebar.slider(
         "Days since your last pick", 3.0, 5.0, float(bundle["median_interval"]), 0.5,
         help="The Dutch growers harvested every 3–5 days.")
@@ -482,12 +484,12 @@ def render_nl_page():
             "**Important:** this benchmarks a Dutch high-tech glasshouse growing "
             "hydroponically. It is a reference point, not a target for every setup.")
 
-    rate = P.nl_predict_rate(model, bundle, dap, interval)
+    rate = P.nl_predict_rate(model, bundle, stage, interval)
     expected_pick = rate * interval
 
     c1, c2, c3 = st.columns([1, 1, 1.4])
     c1.metric("Expected harvest rate", f"{rate:.3f} kg/m²/day",
-              help=f"What the six Dutch compartments averaged at day {dap}.")
+              help=f"What the six Dutch compartments averaged at day {stage}.")
     c2.metric(f"Expected this pick ({interval:.1f} days)", f"{expected_pick:.2f} kg/m²",
               help="Expected rate multiplied by days since your last harvest.")
     with c3:
@@ -506,30 +508,30 @@ def render_nl_page():
 
     # ---- benchmark curve across the season ----
     st.subheader("📈 Harvest rate across the season")
-    st.caption("X-axis = days since planting. The line is the benchmark this model "
+    st.caption("X-axis = days into the Dutch season. The line is the benchmark this model "
                "predicts; the grey dots are every real harvest recorded in the six "
                "Dutch compartments.")
-    curve = pd.DataFrame({"days since planting": bundle["dap_grid"],
+    curve = pd.DataFrame({"days into season": bundle["stage_grid"],
                           "benchmark rate": bundle["stage_curve"]})
-    obs = pd.concat([pd.DataFrame({"days since planting": x, "rate": y, "compartment": t})
+    obs = pd.concat([pd.DataFrame({"days into season": x, "rate": y, "compartment": t})
                      for t, (x, y) in bundle["observed"].items()])
     dots = alt.Chart(obs).mark_circle(size=26, opacity=0.45, color="#8a8a8a").encode(
-        x=alt.X("days since planting:Q", scale=alt.Scale(zero=False)),
+        x=alt.X("days into season:Q", scale=alt.Scale(zero=False)),
         y=alt.Y("rate:Q", title="class-A harvest (kg/m²/day)"),
-        tooltip=["compartment", "days since planting", "rate"])
+        tooltip=["compartment", "days into season", "rate"])
     line = alt.Chart(curve).mark_line(color="#2e7d32", strokeWidth=2.5).encode(
-        x="days since planting:Q", y="benchmark rate:Q")
-    marker = alt.Chart(pd.DataFrame({"d": [dap]})).mark_rule(
+        x="days into season:Q", y="benchmark rate:Q")
+    marker = alt.Chart(pd.DataFrame({"d": [stage]})).mark_rule(
         color="#c62828", strokeDash=[4, 3]).encode(x="d:Q")
     st.altair_chart((dots + line + marker).properties(height=320),
                     use_container_width=True)
-    st.caption(f"The dashed red line marks the crop stage you selected (day {dap}).")
+    st.caption(f"The dashed red line marks the crop stage you selected (day {stage}).")
 
     # ---- climate envelope check ----
     st.subheader("🌡️ Your climate vs the expert band")
     st.caption("The range (10th–90th percentile) the six Dutch compartments actually "
                "held at roughly this crop stage. A reference check — not a prediction.")
-    rows = P.nl_envelope_check(bundle, dap, readings)
+    rows = P.nl_envelope_check(bundle, stage, readings)
     if rows:
         edf = pd.DataFrame(rows)
         edf["status"] = np.where(edf["ok"], "✓ within expert band", "✗ outside")
@@ -564,10 +566,13 @@ def render_nl_page():
             f"**R² {m['r2']:+.2f}** over {m['n']} harvests in "
             f"{m['n_compartments']} compartments.\n"
             f"- **The model uses crop stage only, and that is a deliberate finding.** "
-            f"Temperature, humidity, CO₂, light and irrigation features were all tested "
-            f"and none improved accuracy — several made it worse. After accounting for "
-            f"crop stage there is **no statistically detectable difference between the "
-            f"six compartments at all** (ANOVA F=0.80, p=0.55).\n"
+            f"Temperature, humidity, CO₂, light and irrigation features were all tested, "
+            f"over 15 random seeds. Indoor climate lost outright (R² 0.505–0.550 against "
+            f"0.571). Outside light tied on R² (+0.573 vs +0.571, inside its own noise) "
+            f"but was worse on average error and four times less stable, so the smaller "
+            f"model wins. After accounting for crop stage there is **no statistically "
+            f"detectable difference between the six compartments at all** "
+            f"(ANOVA F=0.80, p=0.55).\n"
             f"- The reason is that all six were run by expert controllers inside a "
             f"narrow, near-optimal envelope: 2.3 °C, 5.4% RH and 156 ppm CO₂ separated "
             f"the extremes, and season totals spanned just 11%. There is very little "

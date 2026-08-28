@@ -63,6 +63,10 @@ def main():
         gh   = num(RAW / team / "GreenhouseClimate.csv").set_index("%time").sort_index()
         slab = num(RAW / team / "GrodanSens.csv").set_index("%time").sort_index()
         prod = num(RAW / team / "Production.csv").dropna(subset=["ProdA"]).sort_values("%time")
+        # Reference/Production.csv carries one stray record from 2019-03-05, months
+        # before this crop was planted. Drop it HERE, before intervals are computed —
+        # left in, it would hand the next harvest a 370-day gap.
+        prod = prod[prod["%time"] > START_T]
 
         times = prod["%time"].to_numpy()
         for i, t in enumerate(times):
@@ -71,7 +75,8 @@ def main():
             r = {
                 "team": team,
                 "time": t,
-                "dap": t - START_T,                       # crop stage, days into the season
+                "days_into_season": t - START_T,          # crop stage; the log starts at
+                                          # transplant, NOT at sowing
                 "interval_days": interval,
                 "ProdA": prod["ProdA"].iloc[i],
                 # kg/m2 PER DAY — harvest gaps vary 3-5 days, so the raw figure
@@ -87,15 +92,12 @@ def main():
 
     d = pd.DataFrame(rows)
 
-    # Reference/Production.csv carries one stray record from 2019-03-05, months
-    # before this crop was planted and with no climate behind it. Drop it.
-    stray = (d["dap"] <= 0).sum()
-    d = d[d["dap"] > 0].reset_index(drop=True)
+    assert (d["interval_days"] <= 6).all(), "impossible harvest interval survived"
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     d.to_csv(OUT, index=False)
 
-    print(f"Harvest events: {len(d)}  (dropped {stray} pre-season record)")
+    print(f"Harvest events: {len(d)}")
     print(f"Features built: {d.shape[1] - 6}")
     print("\nRows per compartment:")
     print(d["team"].value_counts().to_string())

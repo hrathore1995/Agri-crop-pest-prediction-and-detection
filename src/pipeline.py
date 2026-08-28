@@ -205,11 +205,12 @@ NL_LABELS = {
 }
 
 
-def nl_predict_rate(model, bundle, dap, interval_days=None):
+def nl_predict_rate(model, bundle, days_into_season, interval_days=None):
     """Expected class-A harvest rate (kg/m²/day) at a given crop stage."""
     if interval_days is None:
         interval_days = bundle["median_interval"]
-    x = pd.DataFrame([{"dap": float(dap), "interval_days": float(interval_days)}],
+    x = pd.DataFrame([{"days_into_season": float(days_into_season),
+                       "interval_days": float(interval_days)}],
                      columns=bundle["feature_cols"])
     rate = float(model.predict(x)[0])
     return max(0.0, rate)
@@ -226,7 +227,7 @@ def nl_compare(bundle, expected_rate, actual_rate):
     return "On track" if resid <= hi else "Ahead of benchmark"
 
 
-def nl_envelope_check(bundle, dap, readings: dict):
+def nl_envelope_check(bundle, days_into_season, readings: dict):
     """Compare live climate readings to the p10–p90 band the six expert
     compartments actually held at this crop stage. A reference check, not a
     prediction — nothing here feeds the model."""
@@ -234,7 +235,7 @@ def nl_envelope_check(bundle, dap, readings: dict):
     bins = sorted({b for v in env.values() for b in v})
     if not bins:
         return []
-    nearest = min(bins, key=lambda b: abs(b - dap))
+    nearest = min(bins, key=lambda b: abs(b - days_into_season))
     rows = []
     for var in bundle["envelope_vars"]:
         band = env.get(var, {}).get(nearest)
